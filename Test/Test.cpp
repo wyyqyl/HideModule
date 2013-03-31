@@ -13,6 +13,9 @@ int main()
         printf_s("Failed to load HideModule.dll");
         return -1;
     }
+    LoadLibrary(TEXT("HideModule.dll"));
+    LoadLibrary(TEXT("HideModule.dll"));
+    LoadLibrary(TEXT("HideModule.dll"));
     //FreeLibrary(hModule);
     //Test(hModule);
     //HMODULE hModule = GetModuleHandle(TEXT("HideModule.dll"));

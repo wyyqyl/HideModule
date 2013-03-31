@@ -70,29 +70,29 @@ void Print(const LPTSTR fmt, ...) {
     delete []buffer;
 }
 
-bool IncModuleRefCount(HMODULE hModule) {
-    HANDLE hSnapShot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, 0);
-    if (hSnapShot == INVALID_HANDLE_VALUE) {
-        DbgPrint((TEXT("CreateToolhelp32Snapshot failed, Error: %d\n"), GetLastError()));
-        return false;
-    }
-
-    MODULEENTRY32 ModuleEntry = { 0 };
-    ModuleEntry.dwSize = sizeof(MODULEENTRY32);
-    if (!Module32First(hSnapShot, &ModuleEntry)) {
-        DbgPrint((TEXT("Module32First failed, Error: %d\n"), GetLastError()));
-        CloseHandle(hSnapShot);
-        return false;
-    }
-
-    do {
-        if (ModuleEntry.hModule != hModule)
-            LoadLibrary(ModuleEntry.szModule);
-    } while (Module32Next(hSnapShot, &ModuleEntry));
-
-    CloseHandle(hSnapShot);
-    return true;
-}
+//bool IncModuleRefCount(HMODULE hModule) {
+//    HANDLE hSnapShot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, 0);
+//    if (hSnapShot == INVALID_HANDLE_VALUE) {
+//        DbgPrint((TEXT("CreateToolhelp32Snapshot failed, Error: %d\n"), GetLastError()));
+//        return false;
+//    }
+//
+//    MODULEENTRY32 ModuleEntry = { 0 };
+//    ModuleEntry.dwSize = sizeof(MODULEENTRY32);
+//    if (!Module32First(hSnapShot, &ModuleEntry)) {
+//        DbgPrint((TEXT("Module32First failed, Error: %d\n"), GetLastError()));
+//        CloseHandle(hSnapShot);
+//        return false;
+//    }
+//
+//    do {
+//        if (ModuleEntry.hModule != hModule)
+//            LoadLibrary(ModuleEntry.szModule);
+//    } while (Module32Next(hSnapShot, &ModuleEntry));
+//
+//    CloseHandle(hSnapShot);
+//    return true;
+//}
 
 
 bool SetThreadsState(bool IsResume) {
@@ -130,7 +130,6 @@ bool SetThreadsState(bool IsResume) {
     return true;
 }
 
-#ifdef _DEBUG
 void PrintModulesInformation() {
     NTQUERYINFORMATIONPROCESS *pfnNtQueryInformationProcess =
         (NTQUERYINFORMATIONPROCESS *)GetProcAddress(GetModuleHandle(TEXT("ntdll.dll")), "NtQueryInformationProcess");
@@ -144,16 +143,13 @@ void PrintModulesInformation() {
 
             do {
                 LdrModule = (PLDR_MODULE)CONTAINING_RECORD(Current, LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks);
-                DbgPrint((TEXT("Name: %s, BaseAddress: %p, LoadCount: %d\n"), LdrModule->BaseDllName.Buffer,
-                    LdrModule->BaseAddress, LdrModule->LoadCount));
+                Print(TEXT("Name: %s, BaseAddress: %p, LoadCount: %d\n"), LdrModule->BaseDllName.Buffer,
+                    LdrModule->BaseAddress, LdrModule->LoadCount);
                 Current = Current->Flink;
             } while (Current != Head);
         }
     }
 }
-#else
-void PrintModulesInformation() {}
-#endif
 
 void AdjustModuleReferenceCount(HMODULE hModule) {
     NTQUERYINFORMATIONPROCESS *pfnNtQueryInformationProcess =
@@ -175,6 +171,7 @@ void AdjustModuleReferenceCount(HMODULE hModule) {
                     // Add the reference count of DLLs that this module relies on
                     LoadLibraryW(LdrModule->BaseDllName.Buffer);
                     LdrModule->LoadCount = 1;
+                    break;
                 }
                 Current = Current->Flink;
             } while (Current != Head);
@@ -226,14 +223,14 @@ void HideModule(HMODULE hModule, bool DeleteAfter) {
     UNLOADMODULE *pfnUnloadModule = (UNLOADMODULE *)((ULONG_PTR)UnloadModule
         - (ULONG_PTR)ModuleInfo.lpBaseOfDll + (ULONG_PTR)lpNewBaseAddr);
 
-    DbgPrint((TEXT("\n---------------------------------------------------------------------------\n")));
-    DbgPrint((TEXT("Check the modules before adjusting the reference count of the loaded modules\n")));
+    Print(TEXT("\n----------------------------------------------------------------------------\n"));
+    Print(TEXT("Check the modules before adjusting the reference count of the loaded modules\n"));
     PrintModulesInformation();
 
     AdjustModuleReferenceCount(hModule);
 
-    DbgPrint((TEXT("\n-------------------------------------------------------------------------\n")));
-    DbgPrint((TEXT("Check the modules after adjusting the reference count of the loaded modules\n")));
+    Print(TEXT("\n---------------------------------------------------------------------------\n"));
+    Print(TEXT("Check the modules after adjusting the reference count of the loaded modules\n"));
     PrintModulesInformation();
 
     TCHAR FileName[MAX_PATH] = { 0 };
@@ -254,8 +251,8 @@ void HideModule(HMODULE hModule, bool DeleteAfter) {
     // Jump back to the original space
     SetThreadsState(true);
     
-    DbgPrint((TEXT("\n--------------------------------------------\n")));
-    DbgPrint((TEXT("Check the modules after FreeLibrary is called\n")));
+    Print(TEXT("\n---------------------------------------------\n"));
+    Print(TEXT("Check the modules after FreeLibrary is called\n"));
     PrintModulesInformation();
 
     if (!VirtualFree(lpNewBaseAddr, 0, MEM_DECOMMIT)) {
