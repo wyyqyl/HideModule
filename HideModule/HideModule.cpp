@@ -58,8 +58,8 @@ typedef struct _LDR_MODULE
     ULONG TimeDateStamp;
 } LDR_MODULE, *PLDR_MODULE;
 
-#ifdef _DEBUG
-void DebugPrint(const LPTSTR fmt, ...) {
+
+void Print(const LPTSTR fmt, ...) {
     va_list args;
     va_start(args, fmt);
     int len = _vsctprintf(fmt, args);
@@ -69,19 +69,18 @@ void DebugPrint(const LPTSTR fmt, ...) {
     OutputDebugString(buffer);
     delete []buffer;
 }
-#endif
 
 bool IncModuleRefCount(HMODULE hModule) {
     HANDLE hSnapShot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, 0);
     if (hSnapShot == INVALID_HANDLE_VALUE) {
-        DbgPrint(TEXT("CreateToolhelp32Snapshot failed, Error: %d\n"), GetLastError());
+        DbgPrint((TEXT("CreateToolhelp32Snapshot failed, Error: %d\n"), GetLastError()));
         return false;
     }
 
     MODULEENTRY32 ModuleEntry = { 0 };
     ModuleEntry.dwSize = sizeof(MODULEENTRY32);
     if (!Module32First(hSnapShot, &ModuleEntry)) {
-        DbgPrint(TEXT("Module32First failed, Error: %d\n"), GetLastError());
+        DbgPrint((TEXT("Module32First failed, Error: %d\n"), GetLastError()));
         CloseHandle(hSnapShot);
         return false;
     }
@@ -99,7 +98,7 @@ bool IncModuleRefCount(HMODULE hModule) {
 bool SetThreadsState(bool IsResume) {
     HANDLE hSnapShot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
     if (hSnapShot == INVALID_HANDLE_VALUE) {
-        DbgPrint(TEXT("CreateToolhelp32Snapshot failed, Error: %d\n"), GetLastError());
+        DbgPrint((TEXT("CreateToolhelp32Snapshot failed, Error: %d\n"), GetLastError()));
         return false;
     }
 
@@ -108,7 +107,7 @@ bool SetThreadsState(bool IsResume) {
     DWORD ThreadId = GetCurrentThreadId();
     DWORD ProcessId = GetCurrentProcessId();
     if (!Thread32First(hSnapShot, &ThreadEntry)) {
-        DbgPrint(TEXT("Thread32First failed, Error: %d\n"), GetLastError());
+        DbgPrint((TEXT("Thread32First failed, Error: %d\n"), GetLastError()));
         CloseHandle(hSnapShot);
         return false;
     }
@@ -131,7 +130,8 @@ bool SetThreadsState(bool IsResume) {
     return true;
 }
 
-void LoopProcessModule(bool ShouldAdjust, HMODULE hModule) {
+#ifdef _DEBUG
+void PrintModulesInformation() {
     NTQUERYINFORMATIONPROCESS *pfnNtQueryInformationProcess =
         (NTQUERYINFORMATIONPROCESS *)GetProcAddress(GetModuleHandle(TEXT("ntdll.dll")), "NtQueryInformationProcess");
     if (pfnNtQueryInformationProcess != NULL) {
@@ -144,17 +144,37 @@ void LoopProcessModule(bool ShouldAdjust, HMODULE hModule) {
 
             do {
                 LdrModule = (PLDR_MODULE)CONTAINING_RECORD(Current, LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks);
-                DbgPrint(TEXT("Name: %s, BaseAddress: %p, LoadCount: %d\n"), LdrModule->BaseDllName.Buffer,
-                    LdrModule->BaseAddress, LdrModule->LoadCount);
+                DbgPrint((TEXT("Name: %s, BaseAddress: %p, LoadCount: %d\n"), LdrModule->BaseDllName.Buffer,
+                    LdrModule->BaseAddress, LdrModule->LoadCount));
+                Current = Current->Flink;
+            } while (Current != Head);
+        }
+    }
+}
+#else
+void PrintModulesInformation() {}
+#endif
 
-                if (ShouldAdjust) {
-                    // The LoadCount of DLLs that are static linked is -1, that kind of DLLs can't be freed
-                    // by FreeLibrary. So I modify that LoadCount to 1 in case that this DLL is static linked.
-                    if (LdrModule->BaseAddress == hModule) {
-                        LdrModule->LoadCount = 1;
-                    } else if (LdrModule->LoadCount > 0) {
-                        LdrModule->LoadCount++;
-                    }
+void AdjustModuleReferenceCount(HMODULE hModule) {
+    NTQUERYINFORMATIONPROCESS *pfnNtQueryInformationProcess =
+        (NTQUERYINFORMATIONPROCESS *)GetProcAddress(GetModuleHandle(TEXT("ntdll.dll")), "NtQueryInformationProcess");
+    if (pfnNtQueryInformationProcess != NULL) {
+        PROCESS_BASIC_INFORMATION PBI = { 0 };
+        DWORD ReturnLength = 0;
+        if (NT_SUCCESS(pfnNtQueryInformationProcess(GetCurrentProcess(), ProcessBasicInformation, &PBI, sizeof(PBI), &ReturnLength))) {
+            PLDR_MODULE LdrModule = NULL;
+            PLIST_ENTRY Head = PBI.PebBaseAddress->Ldr->InMemoryOrderModuleList.Flink;
+            PLIST_ENTRY Current = Head;
+
+            do {
+                LdrModule = (PLDR_MODULE)CONTAINING_RECORD(Current, LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks);
+
+                // The LoadCount of DLLs that are static linked is -1, that kind of DLLs can't be freed
+                // by FreeLibrary. So I modify that LoadCount to 1 in case that this DLL is static linked.
+                if (LdrModule->BaseAddress == hModule) {
+                    // Add the reference count of DLLs that this module relies on
+                    LoadLibraryW(LdrModule->BaseDllName.Buffer);
+                    LdrModule->LoadCount = 1;
                 }
                 Current = Current->Flink;
             } while (Current != Head);
@@ -170,16 +190,16 @@ bool UnloadModule(HMODULE hModule, LPVOID lpNewBaseAddr, ULONG_PTR SizeOfImage)
     bool ret = false;
 
     if (!FreeLibrary(hModule)) {
-        DbgPrint(TEXT("FreeLibrary for the module failed, Error: %d\n"), GetLastError());
+        DbgPrint((TEXT("FreeLibrary for the module failed, Error: %d\n"), GetLastError()));
     }
     
     // After FreeLibrary, we can't use any functions whose addresses are not retrieved before.
     // And the strings are invalid also.
     LPVOID OriBaseAddr = pfnVirtualAlloc(lpBaseOfDll, SizeOfImage, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     if (OriBaseAddr == NULL) {
-        // DbgPrint(TEXT("pfnVirtualAlloc for OriBaseAddr failed, Error: %d\n"), GetLastError());
+        // DbgPrint((TEXT("pfnVirtualAlloc for OriBaseAddr failed, Error: %d\n"), GetLastError()));
     } else if (OriBaseAddr != lpBaseOfDll) {
-        // DbgPrint(TEXT("OriBaseAddr is not equal to lpBaseOfDll\n"));
+        // DbgPrint((TEXT("OriBaseAddr is not equal to lpBaseOfDll\n")));
     } else {
         pfnMemCpy(OriBaseAddr, lpNewBaseAddr, SizeOfImage);
         ret = true;
@@ -191,14 +211,14 @@ bool UnloadModule(HMODULE hModule, LPVOID lpNewBaseAddr, ULONG_PTR SizeOfImage)
 void HideModule(HMODULE hModule, bool DeleteAfter) {
     MODULEINFO ModuleInfo = { 0 };
     if (!GetModuleInformation(GetCurrentProcess(), hModule, &ModuleInfo, sizeof(ModuleInfo))) {
-        DbgPrint(TEXT("GetModuleInformation failed, Error: %d\n"), GetLastError());
+        DbgPrint((TEXT("GetModuleInformation failed, Error: %d\n"), GetLastError()));
         return;
     }
 
     LPVOID lpNewBaseAddr = VirtualAlloc(NULL, ModuleInfo.SizeOfImage,
         MEM_COMMIT, PAGE_EXECUTE_READWRITE);
     if (lpNewBaseAddr == NULL) {
-        DbgPrint(TEXT("VirtualAlloc for lpNewBaseAddr failed, Error: %d\n"), GetLastError());
+        DbgPrint((TEXT("VirtualAlloc for lpNewBaseAddr failed, Error: %d\n"), GetLastError()));
         return;
     }
 
@@ -206,13 +226,21 @@ void HideModule(HMODULE hModule, bool DeleteAfter) {
     UNLOADMODULE *pfnUnloadModule = (UNLOADMODULE *)((ULONG_PTR)UnloadModule
         - (ULONG_PTR)ModuleInfo.lpBaseOfDll + (ULONG_PTR)lpNewBaseAddr);
 
-    LoopProcessModule(true, hModule);
+    DbgPrint((TEXT("\n---------------------------------------------------------------------------\n")));
+    DbgPrint((TEXT("Check the modules before adjusting the reference count of the loaded modules\n")));
+    PrintModulesInformation();
+
+    AdjustModuleReferenceCount(hModule);
+
+    DbgPrint((TEXT("\n-------------------------------------------------------------------------\n")));
+    DbgPrint((TEXT("Check the modules after adjusting the reference count of the loaded modules\n")));
+    PrintModulesInformation();
 
     TCHAR FileName[MAX_PATH] = { 0 };
     bool HasFileName = false;
     if (DeleteAfter) {
         if (!GetModuleFileName(hModule, FileName, _countof(FileName))) {
-            DbgPrint(TEXT("GetModuleFileName failed, Error: %d\n"), GetLastError());
+            DbgPrint((TEXT("GetModuleFileName failed, Error: %d\n"), GetLastError()));
         } else {
             HasFileName = true;
         }
@@ -221,23 +249,22 @@ void HideModule(HMODULE hModule, bool DeleteAfter) {
     SetThreadsState(false);
     // Jump to the new space, and free the original dll in the new space
     if (!pfnUnloadModule(hModule, lpNewBaseAddr, ModuleInfo.SizeOfImage)) {
-        DbgPrint(TEXT("UnloadModule failed, Error: %d\n"), GetLastError());
+        DbgPrint((TEXT("UnloadModule failed, Error: %d\n"), GetLastError()));
     }
     // Jump back to the original space
     SetThreadsState(true);
     
-#ifdef _DEBUG
-    DbgPrint(TEXT("Check the modules after FreeLibrary is called\n"));
-    LoopProcessModule(false, NULL);
-#endif
+    DbgPrint((TEXT("\n--------------------------------------------\n")));
+    DbgPrint((TEXT("Check the modules after FreeLibrary is called\n")));
+    PrintModulesInformation();
 
     if (!VirtualFree(lpNewBaseAddr, 0, MEM_DECOMMIT)) {
-        DbgPrint(TEXT("VirtualFree for lpNewBaseAddr failed, Error: %d\n"), GetLastError());
+        DbgPrint((TEXT("VirtualFree for lpNewBaseAddr failed, Error: %d\n"), GetLastError()));
     }
 
     if (HasFileName) {
         if (!DeleteFile(FileName)) {
-            DbgPrint(TEXT("DeleteFile failed, Error: %d\n"), GetLastError());
+            DbgPrint((TEXT("DeleteFile failed, Error: %d\n"), GetLastError()));
         }
     }
 }

@@ -6,8 +6,7 @@
 void HideModule(HMODULE hModule, bool DeleteAfter);
 
 #ifdef _DEBUG
-void DebugPrint(const LPTSTR fmt, ...);
-#define DbgPrint DebugPrint
+#define DbgPrint(_x_) Print _x_
 #else
-#define DbgPrint
+#define DbgPrint(_x_)
 #endif
